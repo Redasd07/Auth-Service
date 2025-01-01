@@ -3,10 +3,12 @@ package com.auth.service;
 import com.auth.dto.*;
 import com.auth.entity.User;
 import com.auth.enums.Role;
+import com.auth.exception.CustomException;
 import com.auth.repository.UserRepository;
 import com.auth.security.jwt.JwtTokenUtil;
 import com.auth.utils.DtoConverter;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -36,11 +38,15 @@ public class AuthService {
 
     public User register(RegisterRequest request) {
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
-            throw new RuntimeException("L'email est déjà utilisé.");
+            throw new CustomException("Email is already in use", HttpStatus.CONFLICT);
+        }
+
+        if (userRepository.findByPhone(request.getPhone()).isPresent()) {
+            throw new CustomException("Phone number is already in use", HttpStatus.CONFLICT);
         }
 
         if (!request.getPassword().equals(request.getConfirmPassword())) {
-            throw new RuntimeException("Les mots de passe ne correspondent pas.");
+            throw new CustomException("Passwords do not match", HttpStatus.BAD_REQUEST);
         }
 
         User user = new User();
@@ -63,14 +69,14 @@ public class AuthService {
 
     public void verifyEmail(VerifyEmailRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("Utilisateur non trouvé."));
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
         if (!user.getOtpCode().equals(request.getOtpCode())) {
-            throw new RuntimeException("Code OTP invalide.");
+            throw new CustomException("Invalid OTP code", HttpStatus.BAD_REQUEST);
         }
 
         if (LocalDateTime.now().isAfter(user.getOtpExpirationTime())) {
-            throw new RuntimeException("Code OTP expiré.");
+            throw new CustomException("OTP code expired", HttpStatus.BAD_REQUEST);
         }
 
         user.setEmailVerified(true);
@@ -81,14 +87,14 @@ public class AuthService {
 
     public Map<String, Object> loginWithDetails(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("Utilisateur non trouvé."));
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new RuntimeException("Mot de passe incorrect.");
+            throw new CustomException("Incorrect password", HttpStatus.UNAUTHORIZED);
         }
 
         if (!user.isEmailVerified()) {
-            throw new RuntimeException("L'email n'a pas encore été vérifié.");
+            throw new CustomException("Email is not verified", HttpStatus.FORBIDDEN);
         }
 
         boolean is2faRequired = user.isForce2faOnLogin() ||
@@ -99,7 +105,7 @@ public class AuthService {
             generateAndSendOtp(user.getEmail());
             user.setForce2faOnLogin(false);
             userRepository.save(user);
-            throw new RuntimeException("OTP required.");
+            throw new CustomException("OTP required", HttpStatus.ACCEPTED);
         }
 
         String token = jwtTokenUtil.generateToken(user.getEmail(), user.getRole().name());
@@ -112,46 +118,43 @@ public class AuthService {
 
     public void generateAndSendOtp(String email) {
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Utilisateur non trouvé."));
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
-        // Génération du nouvel OTP
         String otp = generateOtp();
         user.setOtpCode(otp);
         user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(5));
         userRepository.save(user);
 
-        // Envoi de l'OTP par email
         emailService.sendOtpEmail(email, otp);
     }
 
-
     public void verifyOtp(String email, String otpCode) {
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Utilisateur non trouvé."));
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
         if (!user.getOtpCode().equals(otpCode)) {
-            throw new RuntimeException("Code OTP invalide.");
+            throw new CustomException("Invalid OTP code", HttpStatus.BAD_REQUEST);
         }
 
         if (LocalDateTime.now().isAfter(user.getOtpExpirationTime())) {
-            throw new RuntimeException("Code OTP expiré.");
+            throw new CustomException("OTP code expired", HttpStatus.BAD_REQUEST);
         }
 
         user.setLast2faVerification(LocalDateTime.now());
-        user.setOtpCode(null); // Invalider l'OTP après utilisation
+        user.setOtpCode(null);
         user.setOtpExpirationTime(null);
         userRepository.save(user);
     }
 
     public UserDTO getUserDetails(String email) {
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Utilisateur non trouvé."));
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
         return dtoConverter.toUserDTO(user);
     }
 
     public void forgotPassword(String email) {
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Utilisateur non trouvé."));
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
         String otp = generateOtp();
         user.setOtpCode(otp);
@@ -163,10 +166,10 @@ public class AuthService {
 
     public void resetPassword(String token, ResetPasswordRequest request) {
         User user = userRepository.findByOtpCode(token)
-                .orElseThrow(() -> new RuntimeException("Token invalide ou expiré."));
+                .orElseThrow(() -> new CustomException("Invalid or expired token", HttpStatus.BAD_REQUEST));
 
         if (!request.getNewPassword().equals(request.getConfirmNewPassword())) {
-            throw new RuntimeException("Les mots de passe ne correspondent pas.");
+            throw new CustomException("Passwords do not match", HttpStatus.BAD_REQUEST);
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
@@ -176,6 +179,6 @@ public class AuthService {
     }
 
     private String generateOtp() {
-        return String.format("%04d", (int) (Math.random() * 1000000));
+        return String.format("%04d", (int) (Math.random() * 10000));
     }
 }

@@ -5,6 +5,7 @@ import com.auth.dto.RegisterRequest;
 import com.auth.dto.ResetPasswordRequest;
 import com.auth.dto.VerifyEmailRequest;
 import com.auth.dto.UserDTO;
+import com.auth.exception.CustomException;
 import com.auth.service.AuthService;
 import com.auth.utils.DtoConverter;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,10 +24,15 @@ public class AuthController {
     private DtoConverter dtoConverter;
 
     @PostMapping("/register")
-    public ResponseEntity<UserDTO> register(@RequestBody RegisterRequest request) {
-        var user = authService.register(request);
-        return ResponseEntity.ok(dtoConverter.toUserDTO(user));
+    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
+        try {
+            var user = authService.register(request);
+            return ResponseEntity.ok(dtoConverter.toUserDTO(user));
+        } catch (CustomException ex) {
+            return ResponseEntity.status(ex.getStatus()).body(ex.getMessage());
+        }
     }
+
 
     @PostMapping("/verify-email")
     public ResponseEntity<?> verifyEmail(@RequestBody VerifyEmailRequest request) {
