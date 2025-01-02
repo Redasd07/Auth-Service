@@ -1,14 +1,18 @@
 package com.auth.dto;
 
+import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 @Data
+@AllArgsConstructor
+@NoArgsConstructor
 public class UserDTO {
     private Long id;
-    private String nom;
-    private String prenom;
+    private String firstName;
+    private String lastName;
     private String email;
     private String phone;
-    private String role; // Représente le rôle (CLIENT ou ADMIN) sous forme de String
+    private String role;
     private boolean emailVerified;
 }

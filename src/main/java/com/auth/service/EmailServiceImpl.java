@@ -30,19 +30,20 @@ public class EmailServiceImpl implements EmailService {
     }
 
     @Override
-    public void sendPasswordResetEmail(String to, String resetToken) {
+    public void sendPasswordResetEmail(String to, String otp) {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setTo(to);
-        message.setSubject("Réinitialisation de votre mot de passe ScanMe");
+        message.setSubject("Password Reset OTP for ScanMe");
         message.setText("Bonjour,\n\n" +
-                "Nous avons reçu une demande de réinitialisation de votre mot de passe. Veuillez utiliser le code suivant pour confirmer cette demande :\n" +
-                resetToken + "\n\n" +
+                "Nous avons reçu une demande de réinitialisation de votre mot de passe. Voici votre OTP :\n" +
+                otp + "\n\n" +
                 "Ce code est valable pendant 15 minutes.\n\n" +
-                "Si vous n'avez pas demandé cette réinitialisation, veuillez ignorer cet email. Votre compte reste sécurisé.\n\n" +
+                "Si vous n'avez pas demandé cette réinitialisation, veuillez ignorer cet email.\n\n" +
                 "Cordialement,\n" +
                 "L'équipe ScanMe.");
         emailSender.send(message);
     }
+
 
     @Override
     public void sendTwoFactorOtp(String to, String otp) {

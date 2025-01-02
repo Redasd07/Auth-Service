@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class AuthService {
@@ -27,8 +28,7 @@ public class AuthService {
 
     @Autowired
     public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder,
-                       JwtTokenUtil jwtTokenUtil, EmailService emailService,
-                       DtoConverter dtoConverter) {
+                       JwtTokenUtil jwtTokenUtil, EmailService emailService, DtoConverter dtoConverter) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenUtil = jwtTokenUtil;
@@ -50,39 +50,96 @@ public class AuthService {
         }
 
         User user = new User();
-        user.setNom(request.getNom());
-        user.setPrenom(request.getPrenom());
+        user.setFirstName(request.getFirstName());
+        user.setLastName(request.getLastName());
         user.setEmail(request.getEmail());
         user.setPhone(request.getPhone());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setRole(Role.CLIENT);
         user.setEmailVerified(false);
-
-        String otp = generateOtp();
-        user.setOtpCode(otp);
-        user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(15));
         userRepository.save(user);
 
-        emailService.sendOtpEmail(request.getEmail(), otp);
         return user;
     }
 
-    public void verifyEmail(VerifyEmailRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
+    public String generateEmailVerificationToken(String email) {
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
-        if (!user.getOtpCode().equals(request.getOtpCode())) {
-            throw new CustomException("Invalid OTP code", HttpStatus.BAD_REQUEST);
-        }
+        String verificationToken = UUID.randomUUID().toString();
+        user.setVerificationToken(verificationToken);
 
-        if (LocalDateTime.now().isAfter(user.getOtpExpirationTime())) {
-            throw new CustomException("OTP code expired", HttpStatus.BAD_REQUEST);
-        }
+        generateAndSendOtp(user, 15, "EMAIL_VERIFICATION");
+        return verificationToken;
+    }
+
+    public void verifyEmailWithToken(String verificationToken, String otpCode) {
+        User user = getUserByToken(verificationToken);
+        validateOtp(user, otpCode);
 
         user.setEmailVerified(true);
-        user.setOtpCode(null);
-        user.setOtpExpirationTime(null);
+        user.setVerificationToken(null);
         userRepository.save(user);
+    }
+
+    public String forgotPassword(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (!user.isEmailVerified()) {
+            // Si l'email n'est pas vérifié, renvoyer un OTP pour vérification de l'email
+            String verificationToken = UUID.randomUUID().toString();
+            user.setVerificationToken(verificationToken);
+
+            generateAndSendOtp(user, 15, "EMAIL_VERIFICATION");
+
+            userRepository.save(user);
+
+            throw new CustomException(
+                    "Email is not verified",
+                    HttpStatus.FORBIDDEN,
+                    Map.of("verificationToken", verificationToken, "message", "An OTP has been sent to your email for verification.")
+            );
+        }
+
+        // Si l'email est vérifié, générer un OTP pour le reset password
+        String verificationToken = UUID.randomUUID().toString();
+        String otp = generateOtp();
+
+        user.setVerificationToken(verificationToken);
+        user.setOtpCode(otp);
+        user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(15));
+
+        userRepository.save(user);
+
+        emailService.sendPasswordResetEmail(user.getEmail(), otp);
+
+        return verificationToken;
+    }
+
+
+
+    public void resetPassword(String verificationToken, ResetPasswordRequest request) {
+        User user = getUserByToken(verificationToken);
+
+        if (!request.getNewPassword().equals(request.getConfirmNewPassword())) {
+            throw new CustomException("Passwords do not match", HttpStatus.BAD_REQUEST);
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setVerificationToken(null);
+        userRepository.save(user);
+    }
+
+    public void resendEmailVerificationOtp(String verificationToken) {
+        User user = getUserByToken(verificationToken);
+        generateAndSendOtp(user, 15, "EMAIL_VERIFICATION");
+    }
+
+
+    public void resendTwoFactorOtp(String verificationToken) {
+        User user = getUserByToken(verificationToken);
+        generateAndSendOtp(user, 5, "2FA");
     }
 
     public Map<String, Object> loginWithDetails(LoginRequest request) {
@@ -94,7 +151,12 @@ public class AuthService {
         }
 
         if (!user.isEmailVerified()) {
-            throw new CustomException("Email is not verified", HttpStatus.FORBIDDEN);
+            generateAndSendOtp(user, 15, "EMAIL_VERIFICATION");
+            throw new CustomException(
+                    "Email is not verified",
+                    HttpStatus.FORBIDDEN,
+                    Map.of("message", "An OTP has been sent to your email for verification.")
+            );
         }
 
         boolean is2faRequired = user.isForce2faOnLogin() ||
@@ -102,10 +164,18 @@ public class AuthService {
                 user.getLast2faVerification().isBefore(LocalDateTime.now().minusDays(3));
 
         if (is2faRequired) {
-            generateAndSendOtp(user.getEmail());
+            generateAndSend2FAOtp(user.getEmail());
             user.setForce2faOnLogin(false);
+
+            if (user.getVerificationToken() == null) {
+                String verificationToken = UUID.randomUUID().toString();
+                user.setVerificationToken(verificationToken);
+            }
+
             userRepository.save(user);
-            throw new CustomException("OTP required", HttpStatus.ACCEPTED);
+
+            Map<String, Object> additionalData = Map.of("verificationToken", user.getVerificationToken());
+            throw new CustomException("OTP required", HttpStatus.ACCEPTED, additionalData);
         }
 
         String token = jwtTokenUtil.generateToken(user.getEmail(), user.getRole().name());
@@ -116,22 +186,64 @@ public class AuthService {
         return response;
     }
 
-    public void generateAndSendOtp(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
-
-        String otp = generateOtp();
-        user.setOtpCode(otp);
-        user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(5));
-        userRepository.save(user);
-
-        emailService.sendOtpEmail(email, otp);
+    public void verifyResetOtp(String verificationToken, String otpCode) {
+        User user = getUserByToken(verificationToken);
+        validateOtp(user, otpCode);
     }
 
-    public void verifyOtp(String email, String otpCode) {
+    public void verifyOtpWithToken(String verificationToken, String otpCode) {
+        User user = getUserByToken(verificationToken);
+        validateOtp(user, otpCode);
+
+        user.setLast2faVerification(LocalDateTime.now());
+        user.setForce2faOnLogin(false);
+        userRepository.save(user);
+    }
+
+    public UserDTO getUserDetails(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+        return new UserDTO(user.getId(), user.getFirstName(), user.getLastName(), user.getEmail(), user.getPhone(), user.getRole().name(), user.isEmailVerified());
+    }
+    public void resendOtp(String verificationToken, String context) {
+        User user = getUserByToken(verificationToken);
 
+        switch (context) {
+            case "EMAIL_VERIFICATION":
+                generateAndSendOtp(user, 15, "EMAIL_VERIFICATION");
+                break;
+            case "RESET_PASSWORD":
+                generateAndSendOtp(user, 15, "RESET_PASSWORD");
+                break;
+            case "2FA":
+                generateAndSendOtp(user, 5, "2FA");
+                break;
+            default:
+                throw new CustomException("Invalid context for OTP resend", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+
+    private void generateAndSendOtp(User user, int expirationMinutes, String context) {
+        String otp = generateOtp();
+        user.setOtpCode(otp);
+        user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(expirationMinutes));
+        userRepository.save(user);
+
+        switch (context) {
+            case "2FA":
+                emailService.sendTwoFactorOtp(user.getEmail(), otp);
+                break;
+            case "RESET_PASSWORD":
+                emailService.sendPasswordResetEmail(user.getEmail(), otp);
+                break;
+            default:
+                emailService.sendOtpEmail(user.getEmail(), otp);
+                break;
+        }
+    }
+
+    private void validateOtp(User user, String otpCode) {
         if (!user.getOtpCode().equals(otpCode)) {
             throw new CustomException("Invalid OTP code", HttpStatus.BAD_REQUEST);
         }
@@ -140,43 +252,27 @@ public class AuthService {
             throw new CustomException("OTP code expired", HttpStatus.BAD_REQUEST);
         }
 
-        user.setLast2faVerification(LocalDateTime.now());
         user.setOtpCode(null);
         user.setOtpExpirationTime(null);
         userRepository.save(user);
     }
 
-    public UserDTO getUserDetails(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
-        return dtoConverter.toUserDTO(user);
-    }
-
-    public void forgotPassword(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
-
-        String otp = generateOtp();
-        user.setOtpCode(otp);
-        user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(15));
-        userRepository.save(user);
-
-        emailService.sendPasswordResetEmail(email, otp);
-    }
-
-    public void resetPassword(String token, ResetPasswordRequest request) {
-        User user = userRepository.findByOtpCode(token)
+    private User getUserByToken(String token) {
+        return userRepository.findByVerificationToken(token)
                 .orElseThrow(() -> new CustomException("Invalid or expired token", HttpStatus.BAD_REQUEST));
-
-        if (!request.getNewPassword().equals(request.getConfirmNewPassword())) {
-            throw new CustomException("Passwords do not match", HttpStatus.BAD_REQUEST);
-        }
-
-        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
-        user.setOtpCode(null);
-        user.setOtpExpirationTime(null);
-        userRepository.save(user);
     }
+
+    private void generateAndSend2FAOtp(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        generateAndSendOtp(user, 5, "2FA");
+    }
+    public User getUserByEmail(String email) {
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+    }
+
 
     private String generateOtp() {
         return String.format("%04d", (int) (Math.random() * 10000));

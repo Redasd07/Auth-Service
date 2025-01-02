@@ -1,81 +1,153 @@
 package com.auth.controller;
 
-import com.auth.dto.LoginRequest;
-import com.auth.dto.RegisterRequest;
-import com.auth.dto.ResetPasswordRequest;
-import com.auth.dto.VerifyEmailRequest;
-import com.auth.dto.UserDTO;
+import com.auth.dto.*;
+import com.auth.entity.User;
 import com.auth.exception.CustomException;
 import com.auth.service.AuthService;
 import com.auth.utils.DtoConverter;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
-    @Autowired
-    private AuthService authService;
+    private final AuthService authService;
+    private final DtoConverter dtoConverter;
 
     @Autowired
-    private DtoConverter dtoConverter;
+    public AuthController(AuthService authService, DtoConverter dtoConverter) {
+        this.authService = authService;
+        this.dtoConverter = dtoConverter;
+    }
 
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
         try {
             var user = authService.register(request);
-            return ResponseEntity.ok(dtoConverter.toUserDTO(user));
+            String verificationToken = authService.generateEmailVerificationToken(user.getEmail());
+            return ResponseEntity.ok(Map.of(
+                    "user", dtoConverter.toUserDTO(user),
+                    "verificationToken", verificationToken
+            ));
         } catch (CustomException ex) {
-            return ResponseEntity.status(ex.getStatus()).body(ex.getMessage());
+            return ResponseEntity.status(ex.getStatus()).body(Map.of("error", ex.getMessage()));
+        }
+    }
+
+    @PostMapping("/verify-email")
+    public ResponseEntity<?> verifyEmail(@RequestBody VerifyEmailRequest request) {
+        try {
+            authService.verifyEmailWithToken(request.getVerificationToken(), request.getOtpCode());
+            return ResponseEntity.ok(Map.of("message", "Email verified successfully."));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/resend-otp")
+    public ResponseEntity<?> resendOtp(@RequestBody Map<String, String> request) {
+        try {
+            String verificationToken = request.get("verificationToken");
+            String context = request.get("context"); // "EMAIL_VERIFICATION", "RESET_PASSWORD", or "2FA"
+
+            authService.resendOtp(verificationToken, context);
+
+            return ResponseEntity.ok(Map.of("message", "OTP resent successfully."));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
         }
     }
 
 
-    @PostMapping("/verify-email")
-    public ResponseEntity<?> verifyEmail(@RequestBody VerifyEmailRequest request) {
-        authService.verifyEmail(request);
-        return ResponseEntity.ok("Email vérifié avec succès.");
-    }
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
         try {
             var response = authService.loginWithDetails(request);
             return ResponseEntity.ok(response);
-        } catch (RuntimeException e) {
-            if ("OTP required.".equals(e.getMessage())) {
-                return ResponseEntity.status(202).body("OTP required.");
+        } catch (CustomException e) {
+            if ("Email is not verified".equals(e.getMessage())) {
+                User user = authService.getUserByEmail(request.getEmail());
+                authService.resendEmailVerificationOtp(user.getVerificationToken()); // Envoyer l'OTP par email
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of(
+                                "error", "Email is not verified",
+                                "verificationToken", user.getVerificationToken()
+                        ));
             }
-            throw e;
+            if ("OTP required".equals(e.getMessage())) {
+                return ResponseEntity.status(HttpStatus.ACCEPTED)
+                        .body(Map.of(
+                                "error", "OTP required",
+                                "verificationToken", e.getAdditionalData().get("verificationToken")
+                        ));
+            }
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
         }
-    }
-
-    @PostMapping("/verify-otp")
-    public ResponseEntity<?> verifyOtp(@RequestParam String email, @RequestParam String otpCode) {
-        authService.verifyOtp(email, otpCode);
-        return ResponseEntity.ok("2FA validée avec succès.");
-    }
-
-    @PostMapping("/resend-otp")
-    public ResponseEntity<?> resendOtp(@RequestParam String email) {
-        authService.generateAndSendOtp(email);
-        return ResponseEntity.ok("OTP renvoyé avec succès.");
     }
 
 
     @PostMapping("/forgot-password")
-    public ResponseEntity<?> forgotPassword(@RequestParam String email) {
-        authService.forgotPassword(email);
-        return ResponseEntity.ok("Un lien de réinitialisation a été envoyé à votre adresse email.");
+    public ResponseEntity<?> forgotPassword(@RequestBody Map<String, String> request) {
+        try {
+            String email = request.get("email");
+            String verificationToken = authService.forgotPassword(email);
+            return ResponseEntity.ok(Map.of(
+                    "message", "An OTP has been sent to your email for password reset.",
+                    "verificationToken", verificationToken
+            ));
+        } catch (CustomException e) {
+            if ("Email is not verified".equals(e.getMessage())) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of(
+                                "error", "Email is not verified",
+                                "verificationToken", e.getAdditionalData().get("verificationToken"),
+                                "message", e.getAdditionalData().get("message")
+                        ));
+            }
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+
+
+    @PostMapping("/verify-reset-otp")
+    public ResponseEntity<?> verifyResetOtp(@RequestBody VerifyEmailRequest request) {
+        try {
+            authService.verifyResetOtp(request.getVerificationToken(), request.getOtpCode());
+            return ResponseEntity.ok(Map.of("message", "OTP verified successfully."));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<?> resetPassword(@RequestParam String token, @RequestBody ResetPasswordRequest request) {
-        authService.resetPassword(token, request);
-        return ResponseEntity.ok("Mot de passe réinitialisé avec succès.");
+    public ResponseEntity<?> resetPassword(@RequestBody ResetPasswordRequest request) {
+        try {
+            authService.resetPassword(request.getVerificationToken(), request);
+            return ResponseEntity.ok(Map.of("message", "Password successfully reset."));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+
+
+
+    @PostMapping("/verify-otp")
+    public ResponseEntity<?> verifyOtp(@RequestBody VerifyEmailRequest request) {
+        try {
+            authService.verifyOtpWithToken(request.getVerificationToken(), request.getOtpCode());
+            return ResponseEntity.ok(Map.of("message", "OTP verified successfully."));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/me")
