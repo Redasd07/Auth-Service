@@ -22,7 +22,7 @@ public class EmailServiceImpl implements EmailService {
                 "Merci de vous être inscrit sur ScanMe !\n\n" +
                 "Pour finaliser votre inscription, veuillez utiliser le code suivant pour vérifier votre email :\n" +
                 otp + "\n\n" +
-                "Ce code est valable pendant 15 minutes.\n\n" +
+                "Ce code est valable pendant 5 minutes.\n\n" +
                 "Si vous n'avez pas initié cette demande, veuillez ignorer cet email.\n\n" +
                 "Cordialement,\n" +
                 "L'équipe ScanMe.");
@@ -37,7 +37,7 @@ public class EmailServiceImpl implements EmailService {
         message.setText("Bonjour,\n\n" +
                 "Nous avons reçu une demande de réinitialisation de votre mot de passe. Voici votre OTP :\n" +
                 otp + "\n\n" +
-                "Ce code est valable pendant 15 minutes.\n\n" +
+                "Ce code est valable pendant 5 minutes.\n\n" +
                 "Si vous n'avez pas demandé cette réinitialisation, veuillez ignorer cet email.\n\n" +
                 "Cordialement,\n" +
                 "L'équipe ScanMe.");
@@ -60,20 +60,6 @@ public class EmailServiceImpl implements EmailService {
         emailSender.send(message);
     }
 
-    @Override
-    public void sendResendOtpEmail(String to, String otp) {
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setTo(to);
-        message.setSubject("Votre nouveau code OTP pour ScanMe");
-        message.setText("Bonjour,\n\n" +
-                "Vous avez demandé un nouveau code OTP pour valider votre compte ou accéder à votre compte.\n\n" +
-                "Voici votre nouveau code OTP : " + otp + "\n\n" +
-                "Ce code est valable pendant 15 minutes.\n\n" +
-                "Si vous n'avez pas initié cette demande, veuillez ignorer cet email.\n\n" +
-                "Cordialement,\n" +
-                "L'équipe ScanMe.");
-        emailSender.send(message);
-    }
 }
 
 

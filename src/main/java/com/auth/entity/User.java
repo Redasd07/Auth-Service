@@ -53,7 +53,9 @@ public class User {
     private String otpCode;
     private LocalDateTime otpExpirationTime;
 
-    private String verificationToken; // Token temporaire pour vérifier l'email
+    private String verificationToken;
+    private LocalDateTime verificationTokenExpiration;
+
     private String resetToken; // Token temporaire pour réinitialiser le mot de passe
 
     private LocalDateTime last2faVerification;

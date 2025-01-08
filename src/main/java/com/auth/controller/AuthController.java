@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -72,25 +73,25 @@ public class AuthController {
             var response = authService.loginWithDetails(request);
             return ResponseEntity.ok(response);
         } catch (CustomException e) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("error", e.getMessage());
+
             if ("Email is not verified".equals(e.getMessage())) {
                 User user = authService.getUserByEmail(request.getEmail());
-                authService.resendEmailVerificationOtp(user.getVerificationToken()); // Envoyer l'OTP par email
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of(
-                                "error", "Email is not verified",
-                                "verificationToken", user.getVerificationToken()
-                        ));
+                authService.resendEmailVerificationOtp(user.getVerificationToken());
+                errorResponse.put("verificationToken", user.getVerificationToken());
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
             }
+
             if ("OTP required".equals(e.getMessage())) {
-                return ResponseEntity.status(HttpStatus.ACCEPTED)
-                        .body(Map.of(
-                                "error", "OTP required",
-                                "verificationToken", e.getAdditionalData().get("verificationToken")
-                        ));
+                errorResponse.put("verificationToken", e.getAdditionalData().get("verificationToken"));
+                return ResponseEntity.status(HttpStatus.ACCEPTED).body(errorResponse);
             }
-            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+
+            return ResponseEntity.status(e.getStatus()).body(errorResponse);
         }
     }
+
 
 
     @PostMapping("/forgot-password")
@@ -137,18 +138,19 @@ public class AuthController {
         }
     }
 
-
-
-
     @PostMapping("/verify-otp")
     public ResponseEntity<?> verifyOtp(@RequestBody VerifyEmailRequest request) {
         try {
             authService.verifyOtpWithToken(request.getVerificationToken(), request.getOtpCode());
             return ResponseEntity.ok(Map.of("message", "OTP verified successfully."));
         } catch (CustomException e) {
-            return ResponseEntity.status(e.getStatus()).body(Map.of("error", e.getMessage()));
+            return ResponseEntity.status(e.getStatus()).body(Map.of(
+                    "error", e.getMessage(),
+                    "additionalData", e.getAdditionalData() // Send additional details if available
+            ));
         }
     }
+
 
     @GetMapping("/me")
     public ResponseEntity<UserDTO> getCurrentUser() {
