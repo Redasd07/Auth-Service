@@ -53,10 +53,13 @@ public class User {
     private String otpCode;
     private LocalDateTime otpExpirationTime;
 
+    @Column(nullable = true)
+    private String otpContext; // Field to track the OTP context
+
     private String verificationToken;
     private LocalDateTime verificationTokenExpiration;
 
-    private String resetToken; // Token temporaire pour réinitialiser le mot de passe
+    private String resetToken; // Temporary token for password reset
 
     private LocalDateTime last2faVerification;
     private boolean force2faOnLogin = true;
@@ -70,5 +73,6 @@ public class User {
     public void resetOtp() {
         this.otpCode = null;
         this.otpExpirationTime = null;
+        this.otpContext = null; // Clear the context as well
     }
 }

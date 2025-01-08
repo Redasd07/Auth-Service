@@ -80,7 +80,7 @@ public class AuthService {
 
     public void verifyEmailWithToken(String verificationToken, String otpCode) {
         User user = getUserByToken(verificationToken);
-        validateOtp(user, otpCode);
+        validateOtp(user, otpCode, "EMAIL_VERIFICATION");
 
         user.setEmailVerified(true);
         user.setVerificationToken(null);
@@ -201,12 +201,12 @@ public class AuthService {
 
     public void verifyResetOtp(String verificationToken, String otpCode) {
         User user = getUserByToken(verificationToken);
-        validateOtp(user, otpCode);
+        validateOtp(user, otpCode, "RESET_PASSWORD");
     }
 
     public void verifyOtpWithToken(String verificationToken, String otpCode) {
         User user = getUserByToken(verificationToken); // Updated method handles expired tokens
-        validateOtp(user, otpCode); // Updated method handles expired OTPs
+        validateOtp(user, otpCode, "2FA");
 
         // Mark 2FA as successful
         user.setLast2faVerification(LocalDateTime.now());
@@ -228,7 +228,7 @@ public class AuthService {
         System.out.println("Resending OTP for context: " + context);
 
         // Handle context-specific OTP generation
-        switch (context.toUpperCase()) { // Convert to uppercase for consistent comparison
+        switch (context.toUpperCase()) {
             case "EMAIL_VERIFICATION":
                 generateAndSendOtp(user, 5, "EMAIL_VERIFICATION");
                 break;
@@ -239,43 +239,75 @@ public class AuthService {
                 generateAndSendOtp(user, 5, "2FA");
                 break;
             default:
+                System.out.println("Invalid context for OTP resend: " + context); // Add log for invalid context
                 throw new CustomException("Invalid context for OTP resend", HttpStatus.BAD_REQUEST,
                         Map.of("message", "Supported contexts are EMAIL_VERIFICATION, RESET_PASSWORD, and 2FA."));
         }
+
+
     }
 
 
     private void generateAndSendOtp(User user, int expirationMinutes, String context) {
         String otp = generateOtp();
-        String hashedOtp = passwordEncoder.encode(otp); // Hash the OTP
-
-        user.setOtpCode(hashedOtp);
+        user.setOtpCode(passwordEncoder.encode(otp));
         user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(expirationMinutes));
+        user.setOtpContext(context); // Ajout du contexte
         userRepository.save(user);
 
+        // Envoi basé sur le contexte
         switch (context) {
-            case "2FA":
-                emailService.sendTwoFactorOtp(user.getEmail(), otp);
+            case "EMAIL_VERIFICATION":
+                emailService.sendOtpEmail(user.getEmail(), otp);
                 break;
             case "RESET_PASSWORD":
                 emailService.sendPasswordResetEmail(user.getEmail(), otp);
                 break;
-            default:
-                emailService.sendOtpEmail(user.getEmail(), otp);
+            case "2FA":
+                System.out.println("Sending 2FA OTP to email: " + user.getEmail()); // Add log for 2FA
+                emailService.sendTwoFactorOtp(user.getEmail(), otp);
                 break;
+
         }
     }
 
-    private void validateOtp(User user, String otpCode) {
+    private void invalidatePreviousToken(User user) {
+        user.setVerificationToken(null);
+        user.setVerificationTokenExpiration(null);
+        userRepository.save(user);
+    }
+
+
+    private void validateOtp(User user, String otpCode, String context) {
+        // Validate the OTP context (EMAIL_VERIFICATION, RESET_PASSWORD, 2FA)
+        if (!context.equalsIgnoreCase(user.getOtpContext())) {
+            throw new CustomException("Invalid OTP context", HttpStatus.BAD_REQUEST,
+                    Map.of("message", "The provided OTP context does not match the expected context."));
+        }
+
         // Check if the OTP has expired
         if (LocalDateTime.now().isAfter(user.getOtpExpirationTime())) {
-            // Regenerate a new OTP if needed
+            // Regenerate a new OTP
             String newOtp = generateOtp();
             user.setOtpCode(passwordEncoder.encode(newOtp));
             user.setOtpExpirationTime(LocalDateTime.now().plusMinutes(5)); // Reset expiration time
+            user.setOtpContext(context); // Ensure context is updated
             userRepository.save(user);
 
-            emailService.sendOtpEmail(user.getEmail(), newOtp); // Send the new OTP
+            // Send the new OTP
+            switch (context.toUpperCase()) {
+                case "EMAIL_VERIFICATION":
+                    emailService.sendOtpEmail(user.getEmail(), newOtp);
+                    break;
+                case "RESET_PASSWORD":
+                    emailService.sendPasswordResetEmail(user.getEmail(), newOtp);
+                    break;
+                case "2FA":
+                    emailService.sendTwoFactorOtp(user.getEmail(), newOtp);
+                    break;
+                default:
+                    throw new CustomException("Unsupported OTP context", HttpStatus.BAD_REQUEST);
+            }
 
             throw new CustomException("OTP code expired. A new OTP has been sent.", HttpStatus.BAD_REQUEST,
                     Map.of("message", "Please check your email for the new OTP code."));
@@ -283,12 +315,14 @@ public class AuthService {
 
         // Validate the OTP
         if (!passwordEncoder.matches(otpCode, user.getOtpCode())) {
-            throw new CustomException("Invalid OTP code", HttpStatus.BAD_REQUEST);
+            throw new CustomException("Invalid OTP code", HttpStatus.BAD_REQUEST,
+                    Map.of("message", "The provided OTP code is incorrect."));
         }
 
-        // Clear OTP after successful validation
+        // Clear OTP and expiration time after successful validation
         user.setOtpCode(null);
         user.setOtpExpirationTime(null);
+        user.setOtpContext(null); // Clear the context as well
         userRepository.save(user);
     }
 
@@ -297,17 +331,19 @@ public class AuthService {
         User user = userRepository.findByVerificationToken(token)
                 .orElseThrow(() -> new CustomException("Invalid token", HttpStatus.BAD_REQUEST));
 
-        // Check if the token has expired
-        if (user.getVerificationTokenExpiration().isBefore(LocalDateTime.now())) {
-            // Regenerate a new token if needed
+        if (LocalDateTime.now().isAfter(user.getVerificationTokenExpiration())) {
             String newToken = UUID.randomUUID().toString();
             user.setVerificationToken(newToken);
-            user.setVerificationTokenExpiration(LocalDateTime.now().plusMinutes(5)); // Reset expiration time
+            user.setVerificationTokenExpiration(LocalDateTime.now().plusMinutes(5));
             userRepository.save(user);
 
-            throw new CustomException("Token has expired. A new token has been sent.", HttpStatus.BAD_REQUEST,
-                    Map.of("newToken", newToken, "message", "Please use the new token sent to your email."));
+            // Send a new OTP based on the current context
+            generateAndSendOtp(user, 5, user.getOtpContext());
+
+            throw new CustomException("Token expired. A new token has been sent.", HttpStatus.BAD_REQUEST,
+                    Map.of("newToken", newToken, "message", "Please check your email for the new OTP code."));
         }
+
 
         return user;
     }
