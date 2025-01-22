@@ -218,7 +218,7 @@ public class AuthService {
     public UserDTO getUserDetails(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
-        return new UserDTO(user.getId(), user.getFirstName(), user.getLastName(), user.getEmail(), user.getPhone(), user.getRole().name(), user.isEmailVerified());
+        return new UserDTO(user.getFirstName());
     }
     public void resendOtp(String verificationToken, String context) {
         // Retrieve user by token

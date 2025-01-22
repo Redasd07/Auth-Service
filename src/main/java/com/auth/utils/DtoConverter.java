@@ -11,7 +11,7 @@ public class DtoConverter {
 
     // Convert User entity to UserDTO
     public UserDTO toUserDTO(User user) {
-        UserDTO userDTO = new UserDTO();
+        UserDTO userDTO = new UserDTO(user.getEmail()); // Replaced mockEmail with user.getEmail()
         BeanUtils.copyProperties(user, userDTO);
         userDTO.setRole(user.getRole().name());
         return userDTO;
@@ -51,5 +51,4 @@ public class DtoConverter {
         BeanUtils.copyProperties(user, resetPasswordRequest);
         return resetPasswordRequest;
     }
-
 }

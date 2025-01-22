@@ -15,4 +15,7 @@ public class UserDTO {
     private String phone;
     private String role;
     private boolean emailVerified;
+
+    public UserDTO(String mockEmail) {
+    }
 }
